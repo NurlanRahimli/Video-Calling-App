@@ -1,69 +1,101 @@
 "use client";
-import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { onAuthStateChanged } from "firebase/auth";
-import { auth, waitForAppCheck } from "@/firebaseConfig";
-import { loginWithGoogle, loginWithGithub, completeRedirectLogin } from "@/lib/firebaseService";
+import { useState } from "react";
+import { loginWithGoogle, loginWithGithub /*, loginWithFacebook*/ } from "@/lib/firebaseService";
 
 export default function LoginPage() {
     const router = useRouter();
     const [loading, setLoading] = useState(null);
     const [error, setError] = useState("");
 
-    useEffect(() => {
-        let unsub = () => { };
-
-        (async () => {
-            // ensure App Check token is ready before anything
-            await waitForAppCheck();
-
-            // finish redirect sign-in (mobile)
-            await completeRedirectLogin();
-
-            // now listen and navigate when signed in (works for popup & redirect)
-            unsub = onAuthStateChanged(auth, (user) => {
-                if (user) router.replace("/dashboard");
-            });
-        })();
-
-        return () => unsub();
-    }, [router]);
-
     async function handle(providerFn, key) {
         try {
             setError("");
-            if (loading) return;
+            if (loading) return;              // debounce clicks
             setLoading(key);
 
-            // For popup this returns a user; for redirect it returns null
-            const user = await providerFn();
-            if (!user) return; // redirect flow continues after reload; auth listener will navigate
+            const user = await providerFn();  // popup by default; may be null if redirect started
+            if (!user) return;                // redirect flow kicked off — nothing else to do
+
+            console.log("Signed in:", user.uid);
+            router.replace("/dashboard");
         } catch (e) {
+            // === benign popup cases: re-enable instantly and exit ===
             if (e?.code === "auth/popup-closed-by-user" || e?.code === "auth/cancelled-popup-request") {
-                setLoading(null);
+                setLoading(null);               // <-- immediately re-enable buttons
                 return;
             }
+
+            // === popup blocked: fall back to redirect ===
             if (e?.code === "auth/popup-blocked") {
                 try {
-                    await providerFn({ useRedirect: true }); // fallback for mobile
-                    setLoading(null);
+                    await providerFn({ useRedirect: true });
+                    setLoading(null);             // re-enable until redirect completes
                     return;
                 } catch (e2) {
                     console.error(e2);
                 }
             }
+
             console.error(e);
-            setError(e?.message || e?.code || "Sign-in failed");
+            setError(e?.message ?? e?.code ?? "Sign-in failed");
         } finally {
+            // make sure we never leave it stuck
             setLoading(null);
         }
     }
 
+
+
     return (
         <section className="w-full max-w-md mx-auto">
-            {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
-            <button onClick={() => handle(loginWithGoogle, "google")}>Google</button>
-            <button onClick={() => handle(loginWithGithub, "github")}>GitHub</button>
+            <div className="p-6 border shadow-2xl rounded-3xl border-white/20 bg-white/10 backdrop-blur-md sm:p-8">
+                <div className="mb-6 text-center">
+                    <div className="text-sm tracking-wider uppercase text-white/70">Your logo</div>
+                    <h1 className="mt-2 text-2xl font-semibold text-white">Login</h1>
+                    {error && <p className="mt-2 text-sm text-red-300">{error}</p>}
+                </div>
+
+                <div className="flex items-center gap-3 my-5">
+                    <div className="flex-1 h-px bg-white/20" />
+                    <span className="text-xs text-white/70">Continue with</span>
+                    <div className="flex-1 h-px bg-white/20" />
+                </div>
+
+                <div className="flex items-center justify-center gap-3">
+                    {/* Google */}
+                    <button
+                        type="button" aria-label="Google"
+                        onClick={() => handle(loginWithGoogle, "google")}
+
+                        className="flex items-center justify-center w-10 h-10 border rounded-xl border-white/25 bg-white/10 backdrop-blur hover:bg-white/20 disabled:opacity-60"
+                    >
+                        {/*  Google SVG... */}
+                        <svg width="20" height="20" viewBox="0 0 48 48">
+                            <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303C33.621 32.91 29.19 36 24 36c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.155 7.957 3.043l5.657-5.657C33.915 6.026 29.189 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.651-.389-3.917z" />
+                            <path fill="#FF3D00" d="M6.306 14.691l6.571 4.814C14.57 16.27 18.918 12 24 12c3.059 0 5.842 1.155 7.957 3.043l5.657-5.657C33.915 6.026 29.189 4 24 4 16.318 4 9.656 8.337 6.306 14.691z" />
+                            <path fill="#4CAF50" d="M24 44c5.123 0 9.787-1.953 13.317-5.146l-6.146-5.199C29.199 35.891 26.715 37 24 37c-5.164 0-9.578-3.07-11.292-7.457l-6.534 5.034C9.466 39.561 16.227 44 24 44z" />
+                            <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303c-1.088 3.093-3.57 5.575-6.647 6.646l.001.002 6.146 5.199C33.609 41.797 40 37.5 40 24c0-1.341-.138-2.651-.389-3.917z" />
+                        </svg>
+                    </button>
+
+                    {/* GitHub */}
+                    <button
+                        type="button" aria-label="GitHub"
+                        onClick={() => handle(loginWithGithub, "github")}
+
+                        className="flex items-center justify-center w-10 h-10 border rounded-xl border-white/25 bg-white/10 backdrop-blur hover:bg-white/20 disabled:opacity-60"
+                    >
+                        {/* GitHub icon */}
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+                            <path d="M12 .5C5.73.5.98 5.24.98 11.5c0 4.85 3.14 8.96 7.5 10.41.55.1.75-.24.75-.53 0-.26-.01-1.12-.02-2.03-3.05.66-3.7-1.3-3.7-1.3-.5-1.28-1.22-1.62-1.22-1.62-.99-.67.08-.66.08-.66 1.1.08 1.68 1.14 1.68 1.14.98 1.68 2.57 1.19 3.2.91.1-.71.38-1.19.7-1.47-2.43-.28-4.98-1.21-4.98-5.37 0-1.19.43-2.16 1.14-2.92-.11-.28-.49-1.42.11-2.96 0 0 .92-.29 3.02 1.12.88-.24 1.82-.35 2.76-.36.94.01 1.88.12 2.76.36 2.1-1.41 3.02-1.12 3.02-1.12.6 1.54.22 2.68.11 2.96.71.76 1.14 1.73 1.14 2.92 0 4.17-2.56 5.08-5 5.36.39.34.74 1.02.74 2.06 0 1.49-.01 2.69-.01 3.06 0 .29.2.64.76.53 4.35-1.45 7.49-5.56 7.49-10.41C23.02 5.24 18.27.5 12 .5z" />
+                        </svg>
+                    </button>
+
+                    {/* Facebook (later) */}
+
+                </div>
+            </div>
         </section>
     );
 }
