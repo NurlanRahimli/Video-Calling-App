@@ -13,12 +13,28 @@ const isMobile = () =>
     /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 
 export async function completeRedirectLogin() {
-    try {
-        const res = await getRedirectResult(auth);
-        return res?.user || null;
-    } catch {
-        return null;
-    }
+    await waitForAppCheck();
+
+    return new Promise(resolve => {
+        // 1) Try getRedirectResult
+        getRedirectResult(auth)
+            .then(res => {
+                if (res?.user) {
+                    resolve(res.user);
+                } else {
+                    // 2) Fallback to auth state (race with a short timeout)
+                    const unsub = onAuthStateChanged(auth, user => {
+                        if (user) {
+                            unsub();
+                            resolve(user);
+                        }
+                    });
+                    // 3) If nothing happens in 4s, resolve null
+                    setTimeout(() => { unsub(); resolve(null); }, 4000);
+                }
+            })
+            .catch(() => resolve(null));
+    });
 }
 
 async function signIn(ProviderCtor, opts = {}) {

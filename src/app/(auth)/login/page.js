@@ -1,7 +1,10 @@
 "use client";
+// ✅ React hooks come from 'react'
+import { useEffect, useRef, useState } from "react";
+
+// ✅ Only router comes from 'next/navigation'
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { loginWithGoogle, loginWithGithub } from "@/lib/firebaseService";
+import { loginWithGoogle, loginWithGithub, completeRedirectLogin } from "@/lib/firebaseService";
 import { signInWithEmail } from "@/lib/emailAuth"; // make sure this returns { user, hasProfile } OR just user; see note below
 import { sendEmailVerification } from "firebase/auth";
 import { ensureUserDoc } from "@/lib/userProfile"; // <-- use the helper we added
@@ -12,6 +15,7 @@ export default function LoginPage() {
     const [error, setError] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
+    const didCheckRef = useRef(false);
 
     async function postSignInRoute(user) {
         // 1) Upsert users/{uid} for OAuth or first-time email users
@@ -89,6 +93,21 @@ export default function LoginPage() {
             setLoading(null);
         }
     }
+
+
+    //NEW
+    useEffect(() => {
+        if (didCheckRef.current) return;
+        didCheckRef.current = true;
+
+        (async () => {
+            const user = await completeRedirectLogin();
+            if (user) {
+                // reuse your post-sign-in logic
+                await postSignInRoute(user);
+            }
+        })();
+    }, []);
 
     return (
         <section className="w-full max-w-md mx-auto">
