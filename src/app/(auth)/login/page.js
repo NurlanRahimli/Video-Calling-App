@@ -2,8 +2,9 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { loginWithGoogle, loginWithGithub } from "@/lib/firebaseService";
-// ⬇️ import your email auth helper (adjust the path/name to your file)
-import { signInWithEmail } from "@/lib/emailAuth"; // <-- if your file is elsewhere, change this path
+import { signInWithEmail } from "@/lib/emailAuth"; // make sure this returns { user, hasProfile } OR just user; see note below
+import { sendEmailVerification } from "firebase/auth";
+import { ensureUserDoc } from "@/lib/userProfile"; // <-- use the helper we added
 
 export default function LoginPage() {
     const router = useRouter();
@@ -12,32 +13,52 @@ export default function LoginPage() {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
 
+    async function postSignInRoute(user) {
+        // 1) Upsert users/{uid} for OAuth or first-time email users
+        const { hasUsername } = await ensureUserDoc(user);
+
+        // 2) If you require verified email:
+        if (!user.emailVerified && user.providerData.some(p => p.providerId === "password")) {
+            setError("Please verify your email. We can resend the link.");
+            try {
+                await sendEmailVerification(user, {
+                    url: `${window.location.origin}/verify-email`,
+                    handleCodeInApp: true,
+                });
+                // optionally show a toast/alert here
+            } catch { }
+            return; // stop routing until they verify
+        }
+
+        // 3) Route based on whether a username exists
+        router.replace(hasUsername ? "/dashboard" : "/claim-username");
+    }
+
     async function handle(providerFn, key) {
         try {
             setError("");
             if (loading) return;
             setLoading(key);
 
-            const user = await providerFn();
-            if (!user) return;
-            console.log("Signed in:", user.uid);
-            router.replace("/dashboard");
+            const user = await providerFn(); // if your fn redirects, it may return null
+            if (!user) return; // redirect flow continues elsewhere
+            await postSignInRoute(user);
         } catch (e) {
-            if (
-                e?.code === "auth/popup-closed-by-user" ||
-                e?.code === "auth/cancelled-popup-request"
-            ) {
+            if (e?.code === "auth/popup-closed-by-user" || e?.code === "auth/cancelled-popup-request") {
                 setLoading(null);
                 return;
             }
-            if (e?.code === "auth/popup-blocked") {
+            if (e?.code === "auth/popup-blocked" || e?.code === "auth/operation-not-supported-in-this-environment") {
+                // Fallback to redirect if your provider supports it
                 try {
                     await providerFn({ useRedirect: true });
-                    setLoading(null);
-                    return;
                 } catch (e2) {
                     console.error(e2);
+                    setError(e2?.message ?? e2?.code ?? "Sign-in failed");
+                } finally {
+                    setLoading(null);
                 }
+                return;
             }
             console.error(e);
             setError(e?.message ?? e?.code ?? "Sign-in failed");
@@ -52,9 +73,15 @@ export default function LoginPage() {
             setError("");
             if (loading) return;
             setLoading("email");
-            const user = await signInWithEmail(email.trim(), password);
-            if (!user) return;
-            router.replace("/dashboard");
+
+            // IMPORTANT: what does your helper return?
+            // If it returns { user, hasProfile }: destructure it.
+            // If it returns just user: keep your original line.
+            const result = await signInWithEmail(email.trim(), password);
+
+            const user = result?.user ?? result; // supports both shapes
+            if (!user) throw new Error("Email sign-in failed.");
+            await postSignInRoute(user);
         } catch (e) {
             console.error(e);
             setError(e?.message ?? e?.code ?? "Email sign-in failed");
@@ -67,7 +94,6 @@ export default function LoginPage() {
         <section className="w-full max-w-md mx-auto">
             <div className="p-6 border shadow-2xl rounded-3xl border-white/20 bg-white/10 backdrop-blur-md sm:p-8">
                 <div className="mb-6 text-center">
-                    <div className="text-sm tracking-wider uppercase text-white/70">Your logo</div>
                     <h1 className="mt-2 text-2xl font-semibold text-white">Login</h1>
                     {error && <p className="mt-2 text-sm text-red-300">{error}</p>}
                 </div>
@@ -127,7 +153,6 @@ export default function LoginPage() {
                         onClick={() => handle(loginWithGoogle, "google")}
                         className="flex items-center justify-center w-10 h-10 border rounded-xl border-white/25 bg-white/10 backdrop-blur hover:bg-white/20 disabled:opacity-60"
                     >
-                        {/* Google SVG */}
                         <svg width="20" height="20" viewBox="0 0 48 48">
                             <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303C33.621 32.91 29.19 36 24 36c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.155 7.957 3.043l5.657-5.657C33.915 6.026 29.189 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.651-.389-3.917z" />
                             <path fill="#FF3D00" d="M6.306 14.691l6.571 4.814C14.57 16.27 18.918 12 24 12c3.059 0 5.842 1.155 7.957 3.043l5.657-5.657C33.915 6.026 29.189 4 24 4 16.318 4 9.656 8.337 6.306 14.691z" />
@@ -136,7 +161,6 @@ export default function LoginPage() {
                         </svg>
                     </button>
 
-                    {/* GitHub */}
                     <button
                         type="button" aria-label="GitHub"
                         onClick={() => handle(loginWithGithub, "github")}

@@ -10,7 +10,7 @@ import { auth } from "@/firebaseConfig";
 import { useAuth } from "@/app/auth-provider";
 
 import JoinMeetingModal from "@/components/JoinMeetingModal";
-import { redirect } from "next/dist/server/api-utils";
+import { useUserDoc } from "@/lib/useUserDoc";
 
 
 function GlassTile({ icon: Icon, title, subtitle, className, onClick }) {
@@ -41,6 +41,7 @@ export default function DashboardPage() {
     const [creating, setCreating] = useState(false);
     const { user, loading } = useAuth();
     const [openJoin, setOpenJoin] = useState(false);
+    const { profile, loading: profileLoading } = useUserDoc(user?.uid); // Firestore profile
 
     const now = new Date();
     const time = new Intl.DateTimeFormat(undefined, {
@@ -89,30 +90,45 @@ export default function DashboardPage() {
                 <div className="p-6 text-center border shadow-xl md:col-span-2 xl:col-span-3 rounded-3xl border-white/15 bg-white/10 backdrop-blur-md">
                     {user ? (
                         <>
-                            <span className="inline-block px-3 py-1 text-xs rounded-full bg-white/15">
+                            {/* <span className="inline-block px-3 py-1 text-xs rounded-full bg-white/15">
                                 Signed in with {user.providerData[0]?.providerId || "Unknown"}
-                            </span>
-
+                            </span> */}
+                            {/* Provider(s) — prefer Firestore providerIds if present */}
+                            {(() => {
+                                const provs =
+                                    profile?.providerIds ??
+                                    (user?.providerData || []).map(p => p.providerId) ??
+                                    [];
+                                const label = (p) =>
+                                    p === "google.com" ? "Google" :
+                                        p === "github.com" ? "GitHub" :
+                                            p === "password" ? "Email" : p;
+                                return (
+                                    <span className="inline-block px-3 py-1 text-xs rounded-full bg-white/15">
+                                        Signed in with {provs.length ? provs.map(label).join(", ") : "Unknown"}
+                                    </span>
+                                );
+                            })()}
                             {/* Avatar */}
                             <div className="flex justify-center mt-4">
-                                {user.photoURL ? (
+                                {(profile?.photoURL || user.photoURL) ? (
                                     <img
-                                        src={user.photoURL}
+                                        src={profile?.photoURL || user.photoURL}
                                         alt="User Avatar"
                                         className="w-20 h-20 border-2 rounded-full shadow-md border-white/20"
                                     />
                                 ) : (
                                     <div className="flex items-center justify-center w-20 h-20 text-3xl font-bold rounded-full shadow-md bg-white/20">
-                                        {user.displayName?.charAt(0).toUpperCase() || "U"}
+                                        {(profile?.username?.[0] || profile?.email?.[0] || user?.email?.[0] || "U").toUpperCase()}
                                     </div>
                                 )}
                             </div>
 
                             {/* Username + Email */}
                             <div className="mt-3 text-2xl font-bold tracking-tight">
-                                {user.displayName || "No username set"}
+                                {profile?.username || profile?.name || user?.displayName || "No username set"}
                             </div>
-                            <p className="text-lg text-white/90">{user.email}</p>
+                            <p className="text-lg text-white/90">{profile?.email || user?.email}</p>
                         </>
                     ) : (
                         <span className="inline-block px-3 py-1 text-xs rounded-full bg-white/15">
