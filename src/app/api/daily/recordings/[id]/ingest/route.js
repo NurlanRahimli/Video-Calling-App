@@ -1,3 +1,4 @@
+// app/api/daily/recordings/[id]/ingest/route.js
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,7 @@ function resolveRoom(meta) {
 }
 
 export async function POST(req, { params }) {
-    const id = params?.id;
+    const { id } = params || {};
     if (!id) return NextResponse.json({ ok: false, error: "Missing id" }, { status: 400 });
     if (!DAILY_API_KEY) return NextResponse.json({ ok: false, error: "Missing DAILY_API_KEY" }, { status: 500 });
 
@@ -25,10 +26,8 @@ export async function POST(req, { params }) {
 
         // ---- Storage bucket sanity
         const bucketName = admin.app().options.storageBucket;
-        if (!bucketName || /^gs:\/\//i.test(bucketName) || /^https?:\/\//i.test(bucketName)) {
-            throw new Error(
-                `Invalid or missing storage bucket: "${bucketName || ""}". Expected "my-project.appspot.com".`
-            );
+        if (!bucketName) {
+            throw new Error("Missing storage bucket on Admin app.");
         }
 
         // ---- Auth (Firebase ID token in Authorization: Bearer <idToken>)
@@ -56,7 +55,7 @@ export async function POST(req, { params }) {
             }
         }
 
-        // ---- Optional monthly limit (use Firestore Timestamp)
+        // ---- Optional monthly limit
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const startOfMonthTs = admin.firestore.Timestamp.fromDate(startOfMonth);
@@ -85,6 +84,8 @@ export async function POST(req, { params }) {
         const linkResp = await fetch(`${DAILY_API_BASE}/recordings/${id}/access-link`, {
             headers: { Authorization: `Bearer ${DAILY_API_KEY}` },
             cache: "no-store",
+            // If Daily expects POST for this endpoint in your plan, uncomment:
+            // method: "POST",
         });
         if (!linkResp.ok) {
             const t = await linkResp.text().catch(() => "");
@@ -102,9 +103,10 @@ export async function POST(req, { params }) {
         }
 
         const contentType = fileResp.headers.get("content-type") || "video/mp4";
-        const bucket = getStorage(admin.app()).bucket(bucketName);
+        const bucket = getStorage(admin.app()).bucket(); // <-- no arg, uses default
         const storagePath = `recordings/${ownerId}/${id}/source.mp4`;
-        const file = bucket.file(storagePath);
+        const file = bucket.file(`recordings/${ownerId}/${id}/source.mp4`);
+        console.log("[ingest] using bucket:", bucket.name);
 
         await pipeline(
             Readable.fromWeb(fileResp.body),
@@ -112,7 +114,7 @@ export async function POST(req, { params }) {
         );
 
         // fetch metadata (size) after upload
-        const [meta] = await file.getMetadata().catch(() => [{ size: null }]);
+        const [gcsMeta] = await file.getMetadata().catch(() => [{ size: null }]);
 
         // ---- Save Firestore doc
         const roomResolved = resolveRoom(metaJson);
@@ -124,7 +126,7 @@ export async function POST(req, { params }) {
                 title,
                 createdAt: admin.firestore.FieldValue.serverTimestamp(),
                 durationSec: metaJson?.duration ?? null,
-                sizeBytes: meta?.size ? Number(meta.size) : null,
+                sizeBytes: gcsMeta?.size ? Number(gcsMeta.size) : null,
                 storagePath,
                 playbackType: "mp4",
                 status: "ready",
@@ -140,7 +142,7 @@ export async function POST(req, { params }) {
     }
 }
 
-// Optional: handle preflight/stray OPTIONS to avoid 405 in dev tools
+// Optional: handle preflight/stray OPTIONS
 export async function OPTIONS() {
-    return NextResponse.json({}, { status: 204 });
+    return new Response(null, { status: 204 });
 }

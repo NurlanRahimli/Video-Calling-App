@@ -11,7 +11,7 @@ const firebaseConfig = {
     apiKey: "AIzaSyA6XPxukbfJMf96yV5VepAypTmUBnWMFiE",
     authDomain: "video-calling-app-81b2a.firebaseapp.com",
     projectId: "video-calling-app-81b2a",
-    storageBucket: "video-calling-app-81b2a.appspot.com", // ✅ should be *.appspot.com not *.firebasestorage.app
+    storageBucket: "video-calling-app-81b2a.firebasestorage.app",
     messagingSenderId: "537542070828",
     appId: "1:537542070828:web:8f8b2434bd161a716af789",
     measurementId: "G-2KDL69KGYF"

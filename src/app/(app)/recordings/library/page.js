@@ -9,12 +9,11 @@ import {
     where,
     updateDoc,
     doc,
-    deleteDoc,
 } from "firebase/firestore";
-import { ref, getDownloadURL, deleteObject } from "firebase/storage";
+import { ref, getDownloadURL, listAll } from "firebase/storage";
 import { db, storage } from "@/firebaseConfig";
 import { useAuth } from "@/app/auth-provider";
-import { MoreVertical, Play, Pencil, Trash2, X } from "lucide-react";
+import { MoreVertical, Pencil, Trash2, X } from "lucide-react";
 
 /* ---------- utils ---------- */
 function fmtDuration(sec = 0) {
@@ -34,6 +33,66 @@ function resolveRoom(data = {}) {
         data?.metadata?.roomName ||
         null
     );
+}
+
+/** Try to resolve the correct Storage path for a recording and persist it.
+ *  Strategy:
+ *   1) Try existing data.storagePath (if present)
+ *   2) Try canonical guess: recordings/${ownerId}/${docId}/source.mp4
+ *   3) List the folder and pick a reasonable file (source.*, *.mp4, *.webm)
+ *  Returns: { url, path } where url may be null if not found.
+ */
+// helpers to compare paths without hitting the network
+function pathLooksLike(path, ownerId, docId) {
+    if (!path) return false;
+    const parts = path.split("/");
+    // recordings/<ownerId>/<docId>/...
+    return parts[0] === "recordings" && parts[1] === ownerId && parts[2] === docId && parts.length >= 4;
+}
+
+// Always derive from folder and persist the exact fullPath.
+// No probing => no 404 noise.
+async function resolveUrlAndFixPath(d, data) {
+    const ownerId = data.ownerId;
+    const docId = d.id;
+
+    if (!ownerId || !docId) {
+        console.warn("Missing ownerId or docId on", docId);
+        return { url: null, path: data.storagePath ?? null };
+    }
+
+    try {
+        const folder = `recordings/${ownerId}/${docId}`;
+        const { items } = await listAll(ref(storage, folder));
+
+        // Choose a best file
+        const pick =
+            items.find(i => i.name.startsWith("source.")) ||
+            items.find(i => i.name.endsWith(".mp4")) ||
+            items.find(i => i.name.endsWith(".webm")) ||
+            items[0];
+
+        if (!pick) {
+            console.warn("No files under", folder);
+            return { url: null, path: null };
+        }
+
+        const url = await getDownloadURL(pick);
+
+        // Persist correct path if needed
+        if (pick.fullPath !== data.storagePath) {
+            try {
+                await updateDoc(fsDoc(db, "recordings", docId), { storagePath: pick.fullPath });
+            } catch (e) {
+                console.error("Failed to persist fixed storagePath:", e);
+            }
+        }
+
+        return { url, path: pick.fullPath };
+    } catch (e) {
+        console.error("Failed to list/resolve folder:", e);
+        return { url: null, path: data.storagePath ?? null };
+    }
 }
 
 /* ---------- Edit Modal ---------- */
@@ -87,6 +146,7 @@ function EditTitleModal({ open, initialTitle, onClose, onSave, busy }) {
 
 /* ---------- card ---------- */
 function Card({ item, onEdited, onDeleted }) {
+    const { user } = useAuth(); // ✅ bring user into scope
     const [menuOpen, setMenuOpen] = useState(false);
     const [editOpen, setEditOpen] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -105,17 +165,26 @@ function Card({ item, onEdited, onDeleted }) {
         }
     };
 
+    // in Card.handleDelete
     const handleDelete = async () => {
         const yes = confirm("Delete this recording from your Library? This cannot be undone.");
         if (!yes) return;
         setBusy(true);
         try {
-            // delete from Storage first (ignore if no storagePath found)
-            if (item.storagePath) {
-                await deleteObject(ref(storage, item.storagePath));
+            const idToken = await user?.getIdToken?.();
+            if (!idToken) throw new Error("Not signed in");
+
+            const res = await fetch(`/api/recordings/${item.id}`, {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${idToken}` },
+            });
+
+            if (!res.ok) {
+                const txt = await res.text().catch(() => "");
+                throw new Error(txt || "Delete failed");
             }
-            // then remove Firestore doc
-            await deleteDoc(doc(db, "recordings", item.id));
+
+            // Optimistic UI; onSnapshot will also remove it soon
             onDeleted?.(item.id);
         } catch (e) {
             console.error(e);
@@ -134,14 +203,12 @@ function Card({ item, onEdited, onDeleted }) {
                     <div className="h-full w-full bg-gradient-to-br from-[#3b0e22] via-[#511430] to-[#1b0711]" />
                 )}
 
-                {/* duration chip */}
                 {!!item.durationSec && (
                     <span className="absolute bottom-3 left-3 rounded-full border border-white/25 bg-white/15 px-2.5 py-1 text-xs font-medium backdrop-blur-md">
                         {fmtDuration(item.durationSec)}
                     </span>
                 )}
 
-                {/* kebab */}
                 <div className="absolute right-2 top-2">
                     <button
                         className="p-2 border rounded-lg border-white/20 bg-white/10 hover:bg-white/20"
@@ -150,7 +217,6 @@ function Card({ item, onEdited, onDeleted }) {
                         <MoreVertical size={16} />
                     </button>
 
-                    {/* menu */}
                     {menuOpen && (
                         <div className="absolute right-0 w-40 mt-2 overflow-hidden text-sm border shadow-xl rounded-xl border-white/20 bg-white/10 backdrop-blur-xl">
                             <button
@@ -199,11 +265,9 @@ function Card({ item, onEdited, onDeleted }) {
                             Play
                         </a>
                     )}
-
                 </div>
             </div>
 
-            {/* edit modal */}
             <EditTitleModal
                 open={editOpen}
                 initialTitle={item.title || ""}
@@ -226,30 +290,38 @@ export default function LibraryRecordingsPage() {
         const q = query(collection(db, "recordings"), where("ownerId", "==", user.uid));
 
         const unsub = onSnapshot(q, async (snap) => {
-            const arr = await Promise.all(
-                snap.docs.map(async (d) => {
-                    const data = d.data();
-                    let url = null;
-                    if (data.storagePath) url = await getDownloadURL(ref(storage, data.storagePath));
-                    return {
-                        id: d.id,
-                        ...data,
-                        url,
-                        roomResolved: resolveRoom(data),
-                    };
-                })
-            );
+            const out = [];
 
-            arr.sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
-            setItems(arr);
+            for (const d of snap.docs) {
+                const data = d.data();
+                let url = null;
+
+                try {
+                    const res = await resolveUrlAndFixPath(d, data);
+                    url = res.url; // may be null if not found/authorized
+                } catch (err) {
+                    // Keep UI alive; show no "Play" button if we couldn't resolve
+                    console.error("Failed to resolve URL for", d.id, err);
+                }
+
+                out.push({
+                    id: d.id,
+                    ...data,
+                    url,
+                    roomResolved: resolveRoom(data),
+                });
+            }
+
+            out.sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+            setItems(out);
         });
 
         return () => unsub();
     }, [user]);
 
+    console.log("auth.uid", user?.uid);
     const list = useMemo(() => items, [items]);
 
-    // callbacks for child -> parent updates
     const applyEdit = (id, patch) =>
         setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
     const applyDelete = (id) => setItems((prev) => prev.filter((it) => it.id !== id));

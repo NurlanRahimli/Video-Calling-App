@@ -6,6 +6,7 @@ let cachedAdmin = null;
 export function getAdmin() {
     if (cachedAdmin && admin.apps.length) return cachedAdmin;
 
+    // --- Load service account JSON from env
     const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
     if (!raw) throw new Error("Missing FIREBASE_SERVICE_ACCOUNT");
 
@@ -16,13 +17,18 @@ export function getAdmin() {
         throw new Error("FIREBASE_SERVICE_ACCOUNT is not valid JSON");
     }
 
-    if (svc.private_key && typeof svc.private_key === "string" && svc.private_key.includes("\\n")) {
+    // Fix escaped newlines in private key
+    if (typeof svc.private_key === "string" && svc.private_key.includes("\\n")) {
         svc.private_key = svc.private_key.replace(/\\n/g, "\n");
     }
 
-    const envBucket = process.env.FIREBASE_STORAGE_BUCKET; // expected: <project>.appspot.com
-    const fallbackBucket = svc.project_id ? `${svc.project_id}.appspot.com` : "";
-    const bucketName = envBucket || fallbackBucket;
+    // --- Require explicit bucket (works for both new & old naming)
+    const bucketName = (process.env.FIREBASE_STORAGE_BUCKET || "").trim();
+    if (!bucketName) {
+        throw new Error(
+            "FIREBASE_STORAGE_BUCKET is required. Set it to your exact bucket name, e.g. video-calling-app-81b2a.firebasestorage.app"
+        );
+    }
 
     if (!admin.apps.length) {
         admin.initializeApp({
@@ -32,10 +38,9 @@ export function getAdmin() {
         });
     }
 
-    // Optional sanity logs (remove later)
+    // Dev sanity log
     if (process.env.NODE_ENV !== "production") {
-        const configured = admin.app().options.storageBucket || "(none)";
-        console.log("[admin-init] storageBucket:", configured, " (env:", envBucket, ")");
+        console.log("[admin-init] storageBucket =", admin.app().options.storageBucket);
     }
 
     cachedAdmin = admin;
