@@ -158,14 +158,14 @@ export default function LoginPage() {
                 </form>
 
                 {/* Divider */}
-                <div className="flex items-center gap-3 my-5">
+                <div className="items-center hidden gap-3 my-5 md:flex">
                     <div className="flex-1 h-px bg-white/20" />
                     <span className="text-xs text-white/70">Or continue with</span>
                     <div className="flex-1 h-px bg-white/20" />
                 </div>
 
                 {/* ===== Social buttons (unchanged) ===== */}
-                <div className="flex items-center justify-center gap-3">
+                <div className="items-center justify-center hidden gap-3 md:flex ">
                     {/* Google */}
                     <button
                         type="button" aria-label="Google"
